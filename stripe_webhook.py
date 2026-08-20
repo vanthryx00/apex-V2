@@ -22,12 +22,7 @@ import os
 import json
 import logging
 
-# Load .env automatically so config works in any shell.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+import nexus_env  # noqa: F401 — auto-sniffs .env anywhere + normalizes keys + mkdirs
 
 from flask import Flask, request, jsonify
 

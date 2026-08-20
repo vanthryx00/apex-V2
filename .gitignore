@@ -17,6 +17,7 @@ dist/
 report.html
 *.report.html
 snapshots_out/
+logs/
 
 # ─── OS / editors ───
 .DS_Store

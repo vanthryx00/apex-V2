@@ -30,12 +30,7 @@ from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-# Load .env automatically so config works in any shell.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+import nexus_env  # noqa: F401 — auto-sniffs .env anywhere + normalizes keys + mkdirs
 
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -318,7 +313,7 @@ def run_queue():
 def main():
     p = argparse.ArgumentParser(description="Kairyx Security Snapshot generator")
     p.add_argument("domain", nargs="?", help="Domain to scan")
-    p.add_argument("--out", default="report.html", help="Output HTML path")
+    p.add_argument("--out", default="", help="Output HTML path (default: snapshots_out/<domain>_<date>.html)")
     p.add_argument("--no-db", action="store_true", help="Skip Supabase write")
     p.add_argument("--queue", action="store_true", help="Fulfill paid sales")
     a = p.parse_args()
@@ -339,9 +334,11 @@ def main():
         print(f"   [{it['severity'].upper():8}] {it['title']}")
     if not r["issues"]:
         print("   No major external issues found.")
-    with open(a.out, "w", encoding="utf-8") as f:
+    out_path = a.out or os.path.join("snapshots_out", f"{r['domain']}_{datetime.now().strftime('%Y%m%d')}.html")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(r["report_html"])
-    print(f"\n  Report written: {a.out}")
+    print(f"\n  Report written: {out_path}")
 
     if not a.no_db:
         client = _db()

@@ -1,0 +1,26 @@
+# ─── Secrets — NEVER commit ───
+.env
+.env.*
+!.env.example
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+
+# ─── Generated output ───
+report.html
+*.report.html
+snapshots_out/
+
+# ─── OS / editors ───
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

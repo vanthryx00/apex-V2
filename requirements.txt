@@ -1,0 +1,11 @@
+# APEX outreach engine
+resend>=0.8.0
+supabase>=2.4.0
+
+# Snapshot generator (snapshot.py) — dnspython optional (falls back to nslookup)
+dnspython>=2.6.0
+
+# Stripe webhook receiver (stripe_webhook.py)
+flask>=3.0.0
+waitress>=3.0.0
+stripe>=9.0.0

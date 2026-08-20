@@ -30,6 +30,13 @@ import argparse
 from datetime import datetime, timezone
 from typing import Dict, List
 
+# Load .env automatically so config works in any shell (Git Bash, CMD, PowerShell).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION

@@ -1,6 +1,7 @@
 # APEX outreach engine
 resend>=0.8.0
 supabase>=2.4.0
+python-dotenv>=1.0.0   # auto-loads .env in any shell
 
 # Snapshot generator (snapshot.py) — dnspython optional (falls back to nslookup)
 dnspython>=2.6.0

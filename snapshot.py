@@ -30,6 +30,13 @@ from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
+# Load .env automatically so config works in any shell.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ── config ──────────────────────────────────────────────────────────────────
 class C:

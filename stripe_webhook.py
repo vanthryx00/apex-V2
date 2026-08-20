@@ -21,6 +21,14 @@
 import os
 import json
 import logging
+
+# Load .env automatically so config works in any shell.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from flask import Flask, request, jsonify
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

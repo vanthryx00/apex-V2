@@ -19,6 +19,10 @@ report.html
 snapshots_out/
 logs/
 
+# ─── Portable drive runtime ───
+python/
+.deps_ok
+
 # ─── OS / editors ───
 .DS_Store
 Thumbs.db

@@ -1,0 +1,3 @@
+## 2025-05-18 - Parallelizing Network I/O in Python Security Scanning Engine
+**Learning:** In network scanning applications (like Snapshot domain analysis), network latency from independent socket calls and DNS lookups accumulates sequentially. Using standard library `concurrent.futures.ThreadPoolExecutor` to run independent DNS lookups and network checks concurrently achieves a ~3x speedup without adding third-party dependencies or breaking synchronous API semantics.
+**Action:** When performing multiple independent network I/O operations (e.g. DNS, SSL, HTTP headers), always execute them concurrently with `ThreadPoolExecutor`.

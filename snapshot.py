@@ -26,6 +26,7 @@ import json
 import socket
 import argparse
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
@@ -76,10 +77,17 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Run independent DNS queries concurrently to reduce overall scanning latency
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_a = ex.submit(_dns, domain, "A")
+        f_mx = ex.submit(_dns, domain, "MX")
+        f_txt = ex.submit(_dns, domain, "TXT")
+        f_dmarc = ex.submit(_dns, "_dmarc." + domain, "TXT")
+        a = f_a.result()
+        mx = f_mx.result()
+        txt = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {
@@ -108,24 +116,38 @@ def check_ssl(domain: str) -> dict:
 # ── HTTP security headers ────────────────────────────────────────────────────
 def check_headers(domain: str) -> dict:
     res = {"https_ok": False, "redirects_https": False}
-    try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["https_ok"] = True
-            h = {k.lower(): v for k, v in r.headers.items()}
-        res["hsts"]     = "strict-transport-security" in h
-        res["csp"]      = "content-security-policy" in h
-        res["xfo"]      = "x-frame-options" in h
-        res["xcto"]     = "x-content-type-options" in h
-        res["referrer"] = "referrer-policy" in h
-    except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
-        pass
-    try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["redirects_https"] = r.url.startswith("https://")
-    except Exception:
-        pass
+
+    def _check_https():
+        try:
+            req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                h = {k.lower(): v for k, v in r.headers.items()}
+                return True, h
+        except Exception:
+            return False, {}
+
+    def _check_http():
+        try:
+            req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                return r.url.startswith("https://")
+        except Exception:
+            return False
+
+    # Perform HTTPS header inspection and HTTP redirect check in parallel
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_https = ex.submit(_check_https)
+        f_http = ex.submit(_check_http)
+        https_ok, h = f_https.result()
+        redirects_https = f_http.result()
+
+    res["https_ok"] = https_ok
+    res["redirects_https"] = redirects_https
+    res["hsts"]     = "strict-transport-security" in h
+    res["csp"]      = "content-security-policy" in h
+    res["xfo"]      = "x-frame-options" in h
+    res["xcto"]     = "x-content-type-options" in h
+    res["referrer"] = "referrer-policy" in h
     return res
 
 
@@ -235,9 +257,14 @@ def render_html(domain: str, sc: int, band: str, issues: list) -> str:
 # ── scan orchestration ───────────────────────────────────────────────────────
 def scan(domain: str) -> dict:
     domain = domain.strip().lower().replace("https://", "").replace("http://", "").strip("/")
-    dns_r = check_dns(domain)
-    ssl_r = check_ssl(domain)
-    hdr   = check_headers(domain)
+    # Run independent I/O checks (DNS, SSL certificate, HTTP headers) concurrently
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_dns = ex.submit(check_dns, domain)
+        f_ssl = ex.submit(check_ssl, domain)
+        f_hdr = ex.submit(check_headers, domain)
+        dns_r = f_dns.result()
+        ssl_r = f_ssl.result()
+        hdr   = f_hdr.result()
     sc, band, issues = score(dns_r, ssl_r, hdr)
     return {
         "domain": domain, "risk_score": sc, "risk_band": band,

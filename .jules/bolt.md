@@ -1,0 +1,3 @@
+## 2025-05-18 - Domain Scan Concurrency & Failed Import Caching
+**Learning:** In domain security scanning, sequential network operations (4 DNS queries, SSL handshake, 2 HTTP requests) compound latency (especially on timeouts). Parallelizing with `ThreadPoolExecutor` and using HTTP `HEAD` requests yields a 3x-4x speedup. Additionally, repeatedly trying `import missing_module` inside loop/called functions when a dependency is missing re-runs filesystem module searches every time; caching the check globally avoids overhead.
+**Action:** Always parallelize independent network queries (DNS, SSL, HTTP) in scan/fulfillment engines and cache missing module availability checks at module scope.

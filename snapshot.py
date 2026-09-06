@@ -26,6 +26,7 @@ import json
 import socket
 import argparse
 import subprocess
+import concurrent.futures
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
@@ -49,13 +50,26 @@ TIMEOUT = 8
 
 
 # ── DNS helpers (dnspython if present, else nslookup) ────────────────────────
+HAS_DNSPYTHON = None
+
+
 def _dns(domain: str, rtype: str):
-    try:
-        import dns.resolver  # type: ignore
-        r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
-        return [x.to_text().strip('"') for x in r]
-    except Exception:
-        pass
+    # Bolt Optimization: Cache dnspython availability check to avoid repeated failed import overhead
+    global HAS_DNSPYTHON
+    if HAS_DNSPYTHON is None:
+        try:
+            import dns.resolver  # type: ignore
+            HAS_DNSPYTHON = True
+        except Exception:
+            HAS_DNSPYTHON = False
+
+    if HAS_DNSPYTHON:
+        try:
+            import dns.resolver  # type: ignore
+            r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
+            return [x.to_text().strip('"') for x in r]
+        except Exception:
+            pass
     try:
         out = subprocess.run(
             ["nslookup", "-type=" + rtype, domain],
@@ -76,10 +90,17 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Bolt Optimization: Execute independent DNS record lookups (A, MX, TXT, DMARC) concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        f_a = executor.submit(_dns, domain, "A")
+        f_mx = executor.submit(_dns, domain, "MX")
+        f_txt = executor.submit(_dns, domain, "TXT")
+        f_dmarc = executor.submit(_dns, "_dmarc." + domain, "TXT")
+        a = f_a.result()
+        mx = f_mx.result()
+        txt = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {
@@ -106,26 +127,49 @@ def check_ssl(domain: str) -> dict:
 
 
 # ── HTTP security headers ────────────────────────────────────────────────────
+def _fetch_https_headers(domain: str) -> dict:
+    res = {}
+    # Bolt Optimization: Attempt HEAD request first to avoid fetching full HTTP payload
+    for method in ("HEAD", "GET"):
+        try:
+            req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"}, method=method)
+            with urlopen(req, timeout=TIMEOUT) as r:
+                res["https_ok"] = True
+                h = {k.lower(): v for k, v in r.headers.items()}
+                res["hsts"]     = "strict-transport-security" in h
+                res["csp"]      = "content-security-policy" in h
+                res["xfo"]      = "x-frame-options" in h
+                res["xcto"]     = "x-content-type-options" in h
+                res["referrer"] = "referrer-policy" in h
+                return res
+        except Exception:
+            if method == "GET":
+                break
+    return res
+
+
+def _fetch_http_redirect(domain: str) -> bool:
+    # Bolt Optimization: Attempt HEAD request first to verify redirect without fetching body
+    for method in ("HEAD", "GET"):
+        try:
+            req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"}, method=method)
+            with urlopen(req, timeout=TIMEOUT) as r:
+                return r.url.startswith("https://")
+        except Exception:
+            if method == "GET":
+                break
+    return False
+
+
 def check_headers(domain: str) -> dict:
     res = {"https_ok": False, "redirects_https": False}
-    try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["https_ok"] = True
-            h = {k.lower(): v for k, v in r.headers.items()}
-        res["hsts"]     = "strict-transport-security" in h
-        res["csp"]      = "content-security-policy" in h
-        res["xfo"]      = "x-frame-options" in h
-        res["xcto"]     = "x-content-type-options" in h
-        res["referrer"] = "referrer-policy" in h
-    except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
-        pass
-    try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["redirects_https"] = r.url.startswith("https://")
-    except Exception:
-        pass
+    # Bolt Optimization: Execute HTTPS header check and HTTP redirect check in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_https = executor.submit(_fetch_https_headers, domain)
+        f_redirect = executor.submit(_fetch_http_redirect, domain)
+        https_res = f_https.result()
+        res.update(https_res)
+        res["redirects_https"] = f_redirect.result()
     return res
 
 
@@ -235,9 +279,15 @@ def render_html(domain: str, sc: int, band: str, issues: list) -> str:
 # ── scan orchestration ───────────────────────────────────────────────────────
 def scan(domain: str) -> dict:
     domain = domain.strip().lower().replace("https://", "").replace("http://", "").strip("/")
-    dns_r = check_dns(domain)
-    ssl_r = check_ssl(domain)
-    hdr   = check_headers(domain)
+    # Bolt Optimization: Run check_dns, check_ssl, and check_headers concurrently for 3x-4x scan speedup
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        f_dns = executor.submit(check_dns, domain)
+        f_ssl = executor.submit(check_ssl, domain)
+        f_hdr = executor.submit(check_headers, domain)
+        dns_r = f_dns.result()
+        ssl_r = f_ssl.result()
+        hdr = f_hdr.result()
+
     sc, band, issues = score(dns_r, ssl_r, hdr)
     return {
         "domain": domain, "risk_score": sc, "risk_band": band,

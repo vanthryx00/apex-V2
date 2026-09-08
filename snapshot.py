@@ -29,8 +29,16 @@ import subprocess
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
+from concurrent.futures import ThreadPoolExecutor
 
 import nexus_env  # noqa: F401 — auto-sniffs .env anywhere + normalizes keys + mkdirs
+
+# Check dnspython availability once at module load to avoid repeated import attempts
+try:
+    import dns.resolver  # type: ignore
+    _HAS_DNSPYTHON = True
+except ImportError:
+    _HAS_DNSPYTHON = False
 
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -50,12 +58,14 @@ TIMEOUT = 8
 
 # ── DNS helpers (dnspython if present, else nslookup) ────────────────────────
 def _dns(domain: str, rtype: str):
-    try:
-        import dns.resolver  # type: ignore
-        r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
-        return [x.to_text().strip('"') for x in r]
-    except Exception:
-        pass
+    if _HAS_DNSPYTHON:
+        try:
+            r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
+            return [x.to_text().strip('"') for x in r]
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return []
+        except Exception:
+            pass
     try:
         out = subprocess.run(
             ["nslookup", "-type=" + rtype, domain],
@@ -76,10 +86,17 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Query DNS records concurrently using ThreadPoolExecutor for faster execution
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        f_a = executor.submit(_dns, domain, "A")
+        f_mx = executor.submit(_dns, domain, "MX")
+        f_txt = executor.submit(_dns, domain, "TXT")
+        f_dmarc = executor.submit(_dns, "_dmarc." + domain, "TXT")
+        a = f_a.result()
+        mx = f_mx.result()
+        txt = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {
@@ -235,9 +252,16 @@ def render_html(domain: str, sc: int, band: str, issues: list) -> str:
 # ── scan orchestration ───────────────────────────────────────────────────────
 def scan(domain: str) -> dict:
     domain = domain.strip().lower().replace("https://", "").replace("http://", "").strip("/")
-    dns_r = check_dns(domain)
-    ssl_r = check_ssl(domain)
-    hdr   = check_headers(domain)
+
+    # Run independent scan checks (DNS, SSL certificate, HTTP headers) in parallel
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f_dns = executor.submit(check_dns, domain)
+        f_ssl = executor.submit(check_ssl, domain)
+        f_hdr = executor.submit(check_headers, domain)
+        dns_r = f_dns.result()
+        ssl_r = f_ssl.result()
+        hdr   = f_hdr.result()
+
     sc, band, issues = score(dns_r, ssl_r, hdr)
     return {
         "domain": domain, "risk_score": sc, "risk_band": band,

@@ -54,6 +54,28 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(res["risk_band"], "Low")
         self.assertIn("report_html", res)
 
+    @patch("snapshot._dns")
+    def test_check_dns_concurrent(self, mock_dns):
+        def _mock_dns_side_effect(domain, rtype):
+            if rtype == "A":
+                return ["93.184.216.34"]
+            elif rtype == "MX":
+                return ["mail.example.com"]
+            elif rtype == "TXT" and domain == "example.com":
+                return ["v=spf1 include:_spf.example.com ~all"]
+            elif rtype == "TXT" and domain == "_dmarc.example.com":
+                return ["v=dmarc1 p=reject;"]
+            return []
+
+        mock_dns.side_effect = _mock_dns_side_effect
+
+        res = snapshot.check_dns("example.com")
+        self.assertTrue(res["resolves"])
+        self.assertTrue(res["has_mail"])
+        self.assertEqual(res["spf"], "v=spf1 include:_spf.example.com ~all")
+        self.assertEqual(res["dmarc"], "v=dmarc1 p=reject;")
+        self.assertEqual(mock_dns.call_count, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

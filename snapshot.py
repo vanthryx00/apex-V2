@@ -28,7 +28,6 @@ import argparse
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -78,10 +77,20 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Performance Optimization: Run independent DNS record lookups (A, MX, TXT, DMARC)
+    # concurrently using ThreadPoolExecutor to reduce total DNS resolution latency from
+    # sum(T_a, T_mx, T_txt, T_dmarc) down to max(T_a, T_mx, T_txt, T_dmarc) (~3x-4x speedup).
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        f_a     = executor.submit(_dns, domain, "A")
+        f_mx    = executor.submit(_dns, domain, "MX")
+        f_txt   = executor.submit(_dns, domain, "TXT")
+        f_dmarc = executor.submit(_dns, "_dmarc." + domain, "TXT")
+
+        a     = f_a.result()
+        mx    = f_mx.result()
+        txt   = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {

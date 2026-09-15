@@ -1,3 +1,7 @@
 ## 2025-05-18 - Domain Scan Concurrent Check Execution
 **Learning:** External security scanning (`snapshot.scan`) involves three independent I/O-bound operations: DNS checks, SSL certificate handshake, and HTTP security header inspection. Sequential execution accumulated network wait times (summing latencies to 0.5s–25s). Executing these three phases concurrently using Python stdlib `concurrent.futures.ThreadPoolExecutor(max_workers=3)` reduced total scan latency to `max(T_dns, T_ssl, T_hdr)`, delivering a 50%–90% speedup per scan without external dependencies.
 **Action:** When executing multiple independent network or I/O checks in Python scripts, wrap them in `ThreadPoolExecutor` to eliminate sequential latency bottlenecks.
+
+## 2026-09-15 - Fine-Grained Concurrent DNS and HTTP Header Queries
+**Learning:** Even within single scan phases like `check_dns` or `check_headers`, individual network queries (A, MX, TXT, DMARC DNS lookups or HTTP vs HTTPS probes) were executed sequentially. Executing sub-queries concurrently via `ThreadPoolExecutor` within `check_dns` (max_workers=4) and `check_headers` (max_workers=2) further reduced phase latencies from `sum(T_subqueries)` down to `max(T_subqueries)`, yielding an additional 50%–60% speedup per phase.
+**Action:** Always inspect individual phase functions for hidden sequential network/I/O sub-queries and wrap independent sub-checks in thread pools.

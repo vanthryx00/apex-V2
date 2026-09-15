@@ -26,7 +26,6 @@ import json
 import socket
 import argparse
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from urllib.request import Request, urlopen
@@ -78,10 +77,18 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Performance Optimization: Run independent DNS record lookups (A, MX, TXT, DMARC)
+    # concurrently using ThreadPoolExecutor to reduce check_dns latency from sum(T) to max(T).
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        f_a = executor.submit(_dns, domain, "A")
+        f_mx = executor.submit(_dns, domain, "MX")
+        f_txt = executor.submit(_dns, domain, "TXT")
+        f_dmarc = executor.submit(_dns, "_dmarc." + domain, "TXT")
+        a = f_a.result()
+        mx = f_mx.result()
+        txt = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {
@@ -110,24 +117,40 @@ def check_ssl(domain: str) -> dict:
 # ── HTTP security headers ────────────────────────────────────────────────────
 def check_headers(domain: str) -> dict:
     res = {"https_ok": False, "redirects_https": False}
-    try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["https_ok"] = True
-            h = {k.lower(): v for k, v in r.headers.items()}
+
+    # Performance Optimization: Run HTTPS and HTTP requests concurrently using ThreadPoolExecutor
+    # to reduce check_headers latency from T_https + T_http to max(T_https, T_http).
+    def _fetch_https():
+        try:
+            req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                return True, {k.lower(): v for k, v in r.headers.items()}
+        except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
+            return False, {}
+
+    def _fetch_http():
+        try:
+            req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                return r.url.startswith("https://")
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_https = executor.submit(_fetch_https)
+        f_http  = executor.submit(_fetch_http)
+        https_ok, h = f_https.result()
+        redirects_https = f_http.result()
+
+    res["https_ok"] = https_ok
+    res["redirects_https"] = redirects_https
+    if https_ok:
         res["hsts"]     = "strict-transport-security" in h
         res["csp"]      = "content-security-policy" in h
         res["xfo"]      = "x-frame-options" in h
         res["xcto"]     = "x-content-type-options" in h
         res["referrer"] = "referrer-policy" in h
-    except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
-        pass
-    try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["redirects_https"] = r.url.startswith("https://")
-    except Exception:
-        pass
+
     return res
 
 

@@ -1,31 +1,11 @@
-import unittest
-from unittest.mock import patch, MagicMock
-import snapshot
-
-
-class TestSnapshot(unittest.TestCase):
-
-    def test_score_calculation(self):
-        dns_r = {"spf": "", "dmarc": ""}
-        ssl_r = {"valid": True, "days_to_expiry": 10}
-        hdr = {"https_ok": True, "redirects_https": False}
-
-        sc, band, issues = snapshot.score(dns_r, ssl_r, hdr)
-        self.assertGreater(sc, 0)
-        self.assertIn(band, ["Low", "Medium", "High", "Critical"])
-        self.assertIsInstance(issues, list)
-        self.assertGreater(len(issues), 0)
-
-    def test_render_html(self):
-        html = snapshot.render_html("example.com", 50, "Medium", [])
-        self.assertIn("Security Snapshot — example.com", html)
-        self.assertIn("example.com", html)
 #!/usr/bin/env python3
 import unittest
 from unittest.mock import patch
 import snapshot
 
+
 class TestSnapshot(unittest.TestCase):
+
     def test_score_calculation(self):
         dns_r = {"spf": "", "dmarc": ""}
         ssl_r = {"valid": False, "error": "connection refused"}
@@ -39,6 +19,26 @@ class TestSnapshot(unittest.TestCase):
         html_out = snapshot.render_html("example.com", 20, "Low", [])
         self.assertIn("Security Snapshot — example.com", html_out)
         self.assertIn("Low risk", html_out)
+
+    @patch("snapshot._dns")
+    def test_check_dns_concurrent(self, mock_dns):
+        def mock_dns_side_effect(domain, rtype):
+            if rtype == "A":
+                return ["93.184.216.34"]
+            elif rtype == "MX":
+                return ["mail.example.com"]
+            elif rtype == "TXT" and not domain.startswith("_dmarc"):
+                return ["v=spf1 include:_spf.example.com ~all"]
+            elif rtype == "TXT" and domain.startswith("_dmarc"):
+                return ["v=DMARC1; p=reject;"]
+            return []
+
+        mock_dns.side_effect = mock_dns_side_effect
+        dns_res = snapshot.check_dns("example.com")
+        self.assertTrue(dns_res["resolves"])
+        self.assertTrue(dns_res["has_mail"])
+        self.assertEqual(dns_res["spf"], "v=spf1 include:_spf.example.com ~all")
+        self.assertEqual(dns_res["dmarc"], "v=DMARC1; p=reject;")
 
     @patch("snapshot.check_dns")
     @patch("snapshot.check_ssl")

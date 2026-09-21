@@ -78,10 +78,19 @@ def _dns(domain: str, rtype: str):
 
 
 def check_dns(domain: str) -> dict:
-    a   = _dns(domain, "A")
-    mx  = _dns(domain, "MX")
-    txt = _dns(domain, "TXT")
-    dmarc = _dns("_dmarc." + domain, "TXT")
+    # Performance Optimization: Query DNS records (A, MX, TXT, DMARC TXT) concurrently
+    # using ThreadPoolExecutor to reduce total DNS check latency from sum of individual query
+    # latencies down to the maximum single query latency (~2x-4x speedup).
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        f_a     = executor.submit(_dns, domain, "A")
+        f_mx    = executor.submit(_dns, domain, "MX")
+        f_txt   = executor.submit(_dns, domain, "TXT")
+        f_dmarc = executor.submit(_dns, "_dmarc." + domain, "TXT")
+        a     = f_a.result()
+        mx    = f_mx.result()
+        txt   = f_txt.result()
+        dmarc = f_dmarc.result()
+
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), "")
     dmarc_rec = next((t for t in dmarc if t.lower().startswith("v=dmarc1")), "")
     return {

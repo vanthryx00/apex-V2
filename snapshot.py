@@ -119,24 +119,42 @@ def check_ssl(domain: str) -> dict:
 # ── HTTP security headers ────────────────────────────────────────────────────
 def check_headers(domain: str) -> dict:
     res = {"https_ok": False, "redirects_https": False}
-    try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["https_ok"] = True
-            h = {k.lower(): v for k, v in r.headers.items()}
-        res["hsts"]     = "strict-transport-security" in h
-        res["csp"]      = "content-security-policy" in h
-        res["xfo"]      = "x-frame-options" in h
-        res["xcto"]     = "x-content-type-options" in h
-        res["referrer"] = "referrer-policy" in h
-    except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
-        pass
-    try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["redirects_https"] = r.url.startswith("https://")
-    except Exception:
-        pass
+
+    def _fetch_https():
+        h_res = {}
+        try:
+            req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                h_res["https_ok"] = True
+                h = {k.lower(): v for k, v in r.headers.items()}
+            h_res["hsts"]     = "strict-transport-security" in h
+            h_res["csp"]      = "content-security-policy" in h
+            h_res["xfo"]      = "x-frame-options" in h
+            h_res["xcto"]     = "x-content-type-options" in h
+            h_res["referrer"] = "referrer-policy" in h
+        except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
+            pass
+        return h_res
+
+    def _fetch_http():
+        redir = False
+        try:
+            req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                redir = r.url.startswith("https://")
+        except Exception:
+            pass
+        return redir
+
+    # Performance Optimization: Run HTTPS header check and HTTP redirect check
+    # concurrently using ThreadPoolExecutor to reduce total check_headers latency from
+    # T_https + T_http down to max(T_https, T_http) (~2x speedup).
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_https = executor.submit(_fetch_https)
+        f_http  = executor.submit(_fetch_http)
+        res.update(f_https.result())
+        res["redirects_https"] = f_http.result()
+
     return res
 
 

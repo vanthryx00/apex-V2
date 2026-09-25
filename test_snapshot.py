@@ -41,6 +41,28 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(res["spf"], "v=spf1 include:_spf.example.com ~all")
         self.assertEqual(res["dmarc"], "v=DMARC1; p=none")
 
+    @patch("snapshot._fetch_https_headers")
+    @patch("snapshot._fetch_http_redirect")
+    def test_check_headers(self, mock_http, mock_https):
+        mock_https.return_value = {
+            "https_ok": True,
+            "hsts": True,
+            "csp": False,
+            "xfo": True,
+            "xcto": True,
+            "referrer": False,
+        }
+        mock_http.return_value = True
+
+        res = snapshot.check_headers("example.com")
+        self.assertTrue(res["https_ok"])
+        self.assertTrue(res["redirects_https"])
+        self.assertTrue(res["hsts"])
+        self.assertFalse(res["csp"])
+        self.assertTrue(res["xfo"])
+        self.assertTrue(res["xcto"])
+        self.assertFalse(res["referrer"])
+
     @patch("snapshot.check_dns")
     @patch("snapshot.check_ssl")
     @patch("snapshot.check_headers")

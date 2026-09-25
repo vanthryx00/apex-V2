@@ -5,3 +5,7 @@
 ## 2025-05-18 - Concurrent DNS Record Queries
 **Learning:** `check_dns` sequentially issued up to four DNS queries (`A`, `MX`, `TXT`, and `_dmarc` TXT), accumulating round-trip network delays for each record lookup. By executing all four DNS queries concurrently with `ThreadPoolExecutor(max_workers=4)`, the total DNS phase latency dropped from `T_a + T_mx + T_txt + T_dmarc` to `max(T_a, T_mx, T_txt, T_dmarc)`, yielding a ~3x-4x speedup during DNS resolution.
 **Action:** When querying multiple DNS record types for a domain, parallelize the queries with a `ThreadPoolExecutor` instead of calling them sequentially.
+
+## 2025-05-18 - Concurrent HTTP Security Header Checks
+**Learning:** `check_headers` performed two sequential network requests (an HTTPS request for header inspection and an HTTP request to check redirects), accumulating latencies (`T_https + T_http`). Executing both HTTPS header inspection and HTTP redirect checks concurrently using `ThreadPoolExecutor(max_workers=2)` reduced header check latency to `max(T_https, T_http)`, delivering an approximate ~2x speedup for header inspection.
+**Action:** When performing HTTP/HTTPS validation checks against a domain, execute the independent HTTP and HTTPS requests concurrently with a `ThreadPoolExecutor`.

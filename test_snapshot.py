@@ -41,6 +41,35 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(res["spf"], "v=spf1 include:_spf.example.com ~all")
         self.assertEqual(res["dmarc"], "v=DMARC1; p=none")
 
+    @patch("snapshot.urlopen")
+    def test_check_headers(self, mock_urlopen):
+        def _urlopen_side_effect(req, timeout=None):
+            mock_res = MagicMock()
+            if req.full_url.startswith("https://"):
+                mock_res.headers = {
+                    "Strict-Transport-Security": "max-age=31536000",
+                    "Content-Security-Policy": "default-src 'self'",
+                    "X-Frame-Options": "DENY",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                }
+            else:
+                mock_res.url = "https://example.com"
+            mock_cm = MagicMock()
+            mock_cm.__enter__.return_value = mock_res
+            return mock_cm
+
+        mock_urlopen.side_effect = _urlopen_side_effect
+
+        res = snapshot.check_headers("example.com")
+        self.assertTrue(res["https_ok"])
+        self.assertTrue(res["redirects_https"])
+        self.assertTrue(res["hsts"])
+        self.assertTrue(res["csp"])
+        self.assertTrue(res["xfo"])
+        self.assertTrue(res["xcto"])
+        self.assertTrue(res["referrer"])
+
     @patch("snapshot.check_dns")
     @patch("snapshot.check_ssl")
     @patch("snapshot.check_headers")

@@ -118,25 +118,41 @@ def check_ssl(domain: str) -> dict:
 
 # ── HTTP security headers ────────────────────────────────────────────────────
 def check_headers(domain: str) -> dict:
+    # Performance Optimization: Run HTTPS header inspection and HTTP redirect checks
+    # concurrently using ThreadPoolExecutor to reduce total check_headers duration from
+    # T_https + T_http down to max(T_https, T_http) (~1.6x-2x speedup).
     res = {"https_ok": False, "redirects_https": False}
-    try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["https_ok"] = True
-            h = {k.lower(): v for k, v in r.headers.items()}
-        res["hsts"]     = "strict-transport-security" in h
-        res["csp"]      = "content-security-policy" in h
-        res["xfo"]      = "x-frame-options" in h
-        res["xcto"]     = "x-content-type-options" in h
-        res["referrer"] = "referrer-policy" in h
-    except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
-        pass
-    try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
-            res["redirects_https"] = r.url.startswith("https://")
-    except Exception:
-        pass
+
+    def _check_https():
+        try:
+            req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                h = {k.lower(): v for k, v in r.headers.items()}
+                return {
+                    "https_ok": True,
+                    "hsts": "strict-transport-security" in h,
+                    "csp": "content-security-policy" in h,
+                    "xfo": "x-frame-options" in h,
+                    "xcto": "x-content-type-options" in h,
+                    "referrer": "referrer-policy" in h,
+                }
+        except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
+            return {"https_ok": False}
+
+    def _check_http_redirect():
+        try:
+            req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
+            with urlopen(req, timeout=TIMEOUT) as r:
+                return {"redirects_https": r.url.startswith("https://")}
+        except Exception:
+            return {"redirects_https": False}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_https = executor.submit(_check_https)
+        f_http  = executor.submit(_check_http_redirect)
+        res.update(f_https.result())
+        res.update(f_http.result())
+
     return res
 
 

@@ -117,8 +117,8 @@ def check_ssl(domain: str) -> dict:
 
 
 # ── HTTP security headers ────────────────────────────────────────────────────
-def check_headers(domain: str) -> dict:
-    res = {"https_ok": False, "redirects_https": False}
+def _check_https_headers(domain: str) -> dict:
+    res = {"https_ok": False}
     try:
         req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
         with urlopen(req, timeout=TIMEOUT) as r:
@@ -131,12 +131,33 @@ def check_headers(domain: str) -> dict:
         res["referrer"] = "referrer-policy" in h
     except (URLError, HTTPError, ssl.SSLError, socket.timeout, Exception):
         pass
+    return res
+
+
+def _check_http_redirect(domain: str) -> dict:
+    res = {"redirects_https": False}
     try:
         req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
         with urlopen(req, timeout=TIMEOUT) as r:
             res["redirects_https"] = r.url.startswith("https://")
     except Exception:
         pass
+    return res
+
+
+def check_headers(domain: str) -> dict:
+    # Performance Optimization: Execute HTTPS header inspection and HTTP redirect check
+    # concurrently using ThreadPoolExecutor to reduce total header phase latency from
+    # (T_https + T_http) down to max(T_https, T_http) (~2x speedup).
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_https = executor.submit(_check_https_headers, domain)
+        f_http  = executor.submit(_check_http_redirect, domain)
+        res_https = f_https.result()
+        res_http  = f_http.result()
+
+    res = {"https_ok": False, "redirects_https": False}
+    res.update(res_https)
+    res.update(res_http)
     return res
 
 

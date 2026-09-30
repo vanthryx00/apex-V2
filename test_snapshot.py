@@ -74,6 +74,31 @@ class TestSnapshot(unittest.TestCase):
         self.assertTrue(res["xcto"])
         self.assertTrue(res["referrer"])
 
+    def test_get_ssl_context_caching(self):
+        ctx1 = snapshot._get_ssl_context()
+        ctx2 = snapshot._get_ssl_context()
+        self.assertIs(ctx1, ctx2)
+
+    @patch("socket.create_connection")
+    def test_check_ssl_success(self, mock_create_conn):
+        mock_sock = MagicMock()
+        mock_ss = MagicMock()
+        mock_create_conn.return_value.__enter__.return_value = mock_sock
+
+        # Mock wrap_socket on the cached SSLContext
+        ctx = snapshot._get_ssl_context()
+        with patch.object(ctx, "wrap_socket", return_value=mock_ss):
+            mock_ss.__enter__.return_value = mock_ss
+            mock_ss.getpeercert.return_value = {
+                "notAfter": "Jan 01 00:00:00 2099 UTC",
+                "issuer": ((("organizationName", "Test CA"),),),
+            }
+
+            res = snapshot.check_ssl("example.com")
+            self.assertTrue(res["valid"])
+            self.assertEqual(res["issuer"], "Test CA")
+            self.assertGreater(res["days_to_expiry"], 0)
+
     @patch("snapshot.check_dns")
     @patch("snapshot.check_ssl")
     @patch("snapshot.check_headers")

@@ -50,13 +50,22 @@ TIMEOUT = 8
 
 
 # ── DNS helpers (dnspython if present, else nslookup) ────────────────────────
+# Performance Optimization: Cache dnspython module availability at module level
+# to avoid repeated sys.path filesystem searches on every _dns call when dnspython is not installed.
+try:
+    import dns.resolver  # type: ignore
+    _HAS_DNSPYTHON = True
+except ImportError:
+    _HAS_DNSPYTHON = False
+
+
 def _dns(domain: str, rtype: str):
-    try:
-        import dns.resolver  # type: ignore
-        r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
-        return [x.to_text().strip('"') for x in r]
-    except Exception:
-        pass
+    if _HAS_DNSPYTHON:
+        try:
+            r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
+            return [x.to_text().strip('"') for x in r]
+        except Exception:
+            pass
     try:
         out = subprocess.run(
             ["nslookup", "-type=" + rtype, domain],

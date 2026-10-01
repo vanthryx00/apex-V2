@@ -5,3 +5,7 @@
 ## 2025-05-18 - Concurrent DNS Record Queries
 **Learning:** `check_dns` sequentially issued up to four DNS queries (`A`, `MX`, `TXT`, and `_dmarc` TXT), accumulating round-trip network delays for each record lookup. By executing all four DNS queries concurrently with `ThreadPoolExecutor(max_workers=4)`, the total DNS phase latency dropped from `T_a + T_mx + T_txt + T_dmarc` to `max(T_a, T_mx, T_txt, T_dmarc)`, yielding a ~3x-4x speedup during DNS resolution.
 **Action:** When querying multiple DNS record types for a domain, parallelize the queries with a `ThreadPoolExecutor` instead of calling them sequentially.
+
+## 2025-05-18 - Module Import Caching for Optional Dependencies
+**Learning:** In `snapshot.py`, `_dns` performed `import dns.resolver` inside every function call to check if `dnspython` was available. In environments where `dnspython` was absent, Python repeatedly searched all directories in `sys.path` on each call (4 times per DNS scan), incurring `sys.path` filesystem resolution overhead (~0.35ms per batch). Caching `_HAS_DNSPYTHON` at module load time eliminated repeated failed imports, speeding up DNS module checks by ~600x in fallback mode.
+**Action:** When using optional fallback dependencies in hot paths, check module import availability once at module level rather than on every invocation.

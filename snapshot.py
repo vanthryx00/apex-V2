@@ -48,15 +48,47 @@ class C:
 cfg = C()
 TIMEOUT = 8
 
+# ── performance context & resolver caches ────────────────────────────────────
+_SSL_CONTEXT = None
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Performance Optimization: Lazy-load and cache ssl.SSLContext instance.
+    `ssl.create_default_context()` parses system root CA certificates from disk on every call (~40ms overhead).
+    Caching the context eliminates CA re-parsing across SSL socket checks and HTTPS requests.
+    """
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = ssl.create_default_context()
+    return _SSL_CONTEXT
+
+
+_RESOLVER_MODULE = None
+
+
+def _get_resolver():
+    """Performance Optimization: Probe for dnspython once and cache the module reference.
+    Prevents repeated ImportError exceptions and sys.path lookups on every DNS query when dnspython is absent.
+    """
+    global _RESOLVER_MODULE
+    if _RESOLVER_MODULE is None:
+        try:
+            import dns.resolver  # type: ignore
+            _RESOLVER_MODULE = dns.resolver
+        except ImportError:
+            _RESOLVER_MODULE = False
+    return _RESOLVER_MODULE if _RESOLVER_MODULE else None
+
 
 # ── DNS helpers (dnspython if present, else nslookup) ────────────────────────
 def _dns(domain: str, rtype: str):
-    try:
-        import dns.resolver  # type: ignore
-        r = dns.resolver.resolve(domain, rtype, lifetime=TIMEOUT)
-        return [x.to_text().strip('"') for x in r]
-    except Exception:
-        pass
+    resolver = _get_resolver()
+    if resolver:
+        try:
+            r = resolver.resolve(domain, rtype, lifetime=TIMEOUT)
+            return [x.to_text().strip('"') for x in r]
+        except Exception:
+            pass
     try:
         out = subprocess.run(
             ["nslookup", "-type=" + rtype, domain],
@@ -104,7 +136,7 @@ def check_dns(domain: str) -> dict:
 # ── SSL certificate ──────────────────────────────────────────────────────────
 def check_ssl(domain: str) -> dict:
     try:
-        ctx = ssl.create_default_context()
+        ctx = _get_ssl_context()
         with socket.create_connection((domain, 443), timeout=TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=domain) as ss:
                 cert = ss.getpeercert()
@@ -121,7 +153,7 @@ def _check_https(domain: str) -> dict:
     res = {"https_ok": False}
     try:
         req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
+        with urlopen(req, timeout=TIMEOUT, context=_get_ssl_context()) as r:
             res["https_ok"] = True
             h = {k.lower(): v for k, v in r.headers.items()}
         res["hsts"]     = "strict-transport-security" in h

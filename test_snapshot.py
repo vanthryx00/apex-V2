@@ -57,7 +57,7 @@ class TestSnapshot(unittest.TestCase):
         mock_response_http.__enter__.return_value = mock_response_http
         mock_response_http.url = "https://example.com"
 
-        def urlopen_side_effect(req, timeout=None):
+        def urlopen_side_effect(req, *args, **kwargs):
             if req.full_url.startswith("https://"):
                 return mock_response_https
             else:
@@ -87,6 +87,17 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(res["risk_score"], 0)
         self.assertEqual(res["risk_band"], "Low")
         self.assertIn("report_html", res)
+
+    def test_get_ssl_context_caching(self):
+        ctx1 = snapshot._get_ssl_context()
+        ctx2 = snapshot._get_ssl_context()
+        self.assertIsInstance(ctx1, snapshot.ssl.SSLContext)
+        self.assertIs(ctx1, ctx2)
+
+    def test_get_resolver_caching(self):
+        res1 = snapshot._get_resolver()
+        res2 = snapshot._get_resolver()
+        self.assertIs(res1, res2)
 
 
 if __name__ == "__main__":

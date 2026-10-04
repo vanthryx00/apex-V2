@@ -120,8 +120,21 @@ def check_ssl(domain: str) -> dict:
 def _check_https(domain: str) -> dict:
     res = {"https_ok": False}
     try:
-        req = Request("https://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
+        # Performance Optimization: Issue a HEAD request to inspect HTTP security headers
+        # without downloading the response body payload. Fall back to GET if the server
+        # rejects HEAD (e.g. 405 Method Not Allowed or 501 Not Implemented).
+        url = "https://" + domain
+        try:
+            req = Request(url, headers={"User-Agent": "KairyxSnapshot/1.0"}, method="HEAD")
+            resp = urlopen(req, timeout=TIMEOUT)
+        except HTTPError as e:
+            if e.code in (405, 501):
+                req = Request(url, headers={"User-Agent": "KairyxSnapshot/1.0"})
+                resp = urlopen(req, timeout=TIMEOUT)
+            else:
+                raise
+
+        with resp as r:
             res["https_ok"] = True
             h = {k.lower(): v for k, v in r.headers.items()}
         res["hsts"]     = "strict-transport-security" in h
@@ -136,8 +149,20 @@ def _check_https(domain: str) -> dict:
 
 def _check_http_redirect(domain: str) -> bool:
     try:
-        req = Request("http://" + domain, headers={"User-Agent": "KairyxSnapshot/1.0"})
-        with urlopen(req, timeout=TIMEOUT) as r:
+        # Performance Optimization: Use HEAD request to inspect HTTP-to-HTTPS redirect URL
+        # without fetching response body. Fall back to GET if server rejects HEAD.
+        url = "http://" + domain
+        try:
+            req = Request(url, headers={"User-Agent": "KairyxSnapshot/1.0"}, method="HEAD")
+            resp = urlopen(req, timeout=TIMEOUT)
+        except HTTPError as e:
+            if e.code in (405, 501):
+                req = Request(url, headers={"User-Agent": "KairyxSnapshot/1.0"})
+                resp = urlopen(req, timeout=TIMEOUT)
+            else:
+                raise
+
+        with resp as r:
             return r.url.startswith("https://")
     except Exception:
         return False
